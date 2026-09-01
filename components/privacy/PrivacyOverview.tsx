@@ -4,12 +4,14 @@ import type {
 } from "@/lib/privacy/types";
 
 interface PrivacyOverviewProps {
+  readonly agentInspected: boolean;
   readonly catalog: PrivacyCatalog;
   readonly optionalCategoryCount: number;
   readonly summary: PrivacySummaryData;
 }
 
 export default function PrivacyOverview({
+  agentInspected,
   catalog,
   optionalCategoryCount,
   summary,
@@ -33,8 +35,16 @@ export default function PrivacyOverview({
               A clear view of your privacy choices
             </h2>
           </div>
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600">
-            Transparent demo indicator
+          <span
+            className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+              agentInspected
+                ? "border-violet-200 bg-violet-50 text-violet-800"
+                : "border-slate-200 bg-slate-50 text-slate-600"
+            }`}
+          >
+            {agentInspected
+              ? "Agent inspected this posture"
+              : "Transparent demo indicator"}
           </span>
         </div>
       </div>

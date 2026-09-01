@@ -1,10 +1,25 @@
-import { PRIVACY_SUMMARY_TOOL_NAME } from "../privacy/summary.ts";
+import type {
+  DataCategoryId,
+  PrivacyAccountState,
+} from "../privacy/types.ts";
+import { uiInspectionStore } from "../state/inspection-store.ts";
+import { getPrivacyStateStore } from "../state/store.ts";
+import type { ReadToolInspectionRecorder } from "./tool-context.ts";
+import {
+  EXPLAIN_DATA_USE_TOOL_NAME,
+  GET_CONSENT_STATE_TOOL_NAME,
+  GET_DATA_MAP_TOOL_NAME,
+  WEBMCP_TOOL_NAMES,
+} from "./tool-names.ts";
+import { createConsentStateTool } from "./tools/get-consent-state.ts";
+import { createDataMapTool } from "./tools/get-data-map.ts";
 import { createPrivacySummaryTool } from "./tools/get-privacy-summary.ts";
+import { createExplainDataUseTool } from "./tools/explain-data-use.ts";
 
 export type WebMcpRegistrationResult =
   | {
       readonly status: "registered";
-      readonly toolName: typeof PRIVACY_SUMMARY_TOOL_NAME;
+      readonly toolNames: typeof WEBMCP_TOOL_NAMES;
     }
   | {
       readonly status: "unavailable";
@@ -14,6 +29,43 @@ export type WebMcpRegistrationResult =
       readonly status: "error";
       readonly reason: string;
     };
+
+export interface WebMcpToolFactoryOptions {
+  readonly onToolInvoked?: () => void;
+  readonly getState?: () => PrivacyAccountState;
+  readonly recordInspection?: ReadToolInspectionRecorder;
+}
+
+/**
+ * The central Phase 3 inventory. Keeping construction here makes the
+ * registered surface auditable and prevents component-level registrations.
+ */
+export function createWebMcpTools(
+  options: WebMcpToolFactoryOptions = {},
+): readonly WebMCP.ModelContextTool[] {
+  return [
+    createPrivacySummaryTool(
+      options.onToolInvoked,
+      options.getState,
+      options.recordInspection,
+    ),
+    createDataMapTool(
+      options.onToolInvoked,
+      options.getState,
+      options.recordInspection,
+    ),
+    createConsentStateTool(
+      options.onToolInvoked,
+      options.getState,
+      options.recordInspection,
+    ),
+    createExplainDataUseTool(
+      options.onToolInvoked,
+      options.getState,
+      options.recordInspection,
+    ),
+  ];
+}
 
 interface RegistrationRecord {
   readonly modelContext: WebMCP.ModelContext;
@@ -31,6 +83,24 @@ function errorMessage(error: unknown): string {
 
 export function isWebMcpAvailable(): boolean {
   return typeof document !== "undefined" && document.modelContext !== undefined;
+}
+
+async function registerToolInventory(
+  modelContext: WebMCP.ModelContext,
+  tools: readonly WebMCP.ModelContextTool[],
+): Promise<void> {
+  const registrationController = new AbortController();
+
+  try {
+    for (const tool of tools) {
+      await modelContext.registerTool(tool, {
+        signal: registrationController.signal,
+      });
+    }
+  } catch (error) {
+    registrationController.abort();
+    throw error;
+  }
 }
 
 export async function registerWebMcpTools(
@@ -69,7 +139,7 @@ export async function registerWebMcpTools(
       await existingRegistration.promise;
       return {
         status: "registered",
-        toolName: PRIVACY_SUMMARY_TOOL_NAME,
+        toolNames: WEBMCP_TOOL_NAMES,
       };
     } catch (error) {
       return {
@@ -87,13 +157,27 @@ export async function registerWebMcpTools(
   browserWindow.__snookPhase0WebMcpRegistration = registration;
 
   try {
-    registration.promise = modelContext.registerTool(
-      createPrivacySummaryTool(() => registration.onToolInvoked?.()),
-    );
+    const getState = (): PrivacyAccountState =>
+      getPrivacyStateStore().getState();
+    const recordInspection: ReadToolInspectionRecorder = (
+      toolName,
+      categoryId: DataCategoryId | null = null,
+    ) => {
+      uiInspectionStore.recordInspection(toolName, categoryId);
+    };
+    const tools = createWebMcpTools({
+      onToolInvoked: () => registration.onToolInvoked?.(),
+      getState,
+      recordInspection,
+    });
+
+    // Keep registration sequential so a partial browser implementation cannot
+    // observe an arbitrary order of tools.
+    registration.promise = registerToolInventory(modelContext, tools);
     await registration.promise;
     return {
       status: "registered",
-      toolName: PRIVACY_SUMMARY_TOOL_NAME,
+      toolNames: WEBMCP_TOOL_NAMES,
     };
   } catch (error) {
     if (browserWindow.__snookPhase0WebMcpRegistration === registration) {
@@ -106,3 +190,10 @@ export async function registerWebMcpTools(
     };
   }
 }
+
+export {
+  EXPLAIN_DATA_USE_TOOL_NAME,
+  GET_CONSENT_STATE_TOOL_NAME,
+  GET_DATA_MAP_TOOL_NAME,
+  WEBMCP_TOOL_NAMES,
+};

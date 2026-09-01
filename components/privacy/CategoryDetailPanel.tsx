@@ -13,12 +13,14 @@ import {
 } from "./formatters";
 
 interface CategoryDetailPanelProps {
+  readonly agentInspected: boolean;
   readonly category: DataCategoryDefinition;
   readonly catalog: PrivacyCatalog;
   readonly state: PrivacyAccountState;
 }
 
 export default function CategoryDetailPanel({
+  agentInspected,
   category,
   catalog,
   state,
@@ -51,8 +53,13 @@ export default function CategoryDetailPanel({
               ? "Required · locked"
               : enabled
                 ? "Optional · enabled"
-                : "Optional · disabled"}
+              : "Optional · disabled"}
           </span>
+          {agentInspected ? (
+            <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-800">
+              Agent inspected
+            </span>
+          ) : null}
         </div>
         <h3
           className="mt-3 text-2xl font-semibold tracking-tight text-slate-950"

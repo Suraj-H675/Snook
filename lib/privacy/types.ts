@@ -191,6 +191,62 @@ export interface DataSharingRelationship {
   readonly recipientKind: RecipientKind;
 }
 
+export type DataMapRelationshipType =
+  | "category_to_purpose"
+  | "purpose_to_capability"
+  | "category_to_recipient";
+
+export type DataMapRelationshipStatus = "active" | "paused";
+
+export interface DataMapCategoryNode {
+  readonly id: DataCategoryId;
+  readonly name: string;
+  readonly status: DataMapRelationshipStatus;
+}
+
+export interface DataMapPurposeNode {
+  readonly id: PurposeId;
+  readonly name: string;
+  readonly description: string;
+}
+
+export interface DataMapCapabilityNode {
+  readonly id: CapabilityId;
+  readonly name: string;
+  readonly description: string;
+}
+
+export interface DataMapRecipientNode {
+  readonly id: RecipientId;
+  readonly name: string;
+  readonly kind: RecipientKind;
+}
+
+/**
+ * A normalized relationship edge. Names and descriptions live on the node
+ * collections so a tool consumer can join stable IDs without repeated prose.
+ */
+export interface DataMapRelationship {
+  readonly id: string;
+  readonly relationshipType: DataMapRelationshipType;
+  readonly dataCategoryId: DataCategoryId;
+  readonly purposeId: PurposeId;
+  readonly capabilityId: CapabilityId | null;
+  readonly recipientId: RecipientId | null;
+  readonly dependencyStrength: DependencyStrength | null;
+  readonly dependencyImpact: DependencyImpact | null;
+  readonly status: DataMapRelationshipStatus;
+}
+
+export interface PrivacyDataMap {
+  readonly stateVersion: StateVersion;
+  readonly categories: readonly DataMapCategoryNode[];
+  readonly purposes: readonly DataMapPurposeNode[];
+  readonly capabilities: readonly DataMapCapabilityNode[];
+  readonly recipients: readonly DataMapRecipientNode[];
+  readonly relationships: readonly DataMapRelationship[];
+}
+
 export interface PrivacyScoreCategoryDeduction {
   readonly categoryId: DataCategoryId;
   readonly points: number;

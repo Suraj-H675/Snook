@@ -6,6 +6,10 @@ import { PRIVACY_CATALOG } from "@/lib/privacy/catalog";
 import { SEEDED_PRIVACY_STATE } from "@/lib/privacy/seed";
 import type { DataCategoryId } from "@/lib/privacy/types";
 import {
+  getInitialUiInspectionState,
+  uiInspectionStore,
+} from "@/lib/state/inspection-store";
+import {
   getPrivacyStateStore,
   privacyStateStore,
 } from "@/lib/state/store";
@@ -53,8 +57,11 @@ export default function PrivacyControlCenter() {
     privacyStateStore.getState,
     () => SEEDED_PRIVACY_STATE,
   );
-  const [selectedCategoryId, setSelectedCategoryId] =
-    useState<DataCategoryId>("activity_history");
+  const inspection = useSyncExternalStore(
+    uiInspectionStore.subscribe,
+    uiInspectionStore.getState,
+    getInitialUiInspectionState,
+  );
   const [status, setStatus] = useState<PageStatus>("checking");
   const [statusReason, setStatusReason] = useState(
     "The page checks for WebMCP after the human interface is ready.",
@@ -68,6 +75,7 @@ export default function PrivacyControlCenter() {
   const optionalCategoryCount = categories.filter(
     (category) => category.processingRequirement === "optional",
   ).length;
+  const selectedCategoryId = inspection.selectedCategoryId;
   const selectedCategory =
     getDataCategory(selectedCategoryId, PRIVACY_CATALOG) ?? categories[0];
   const summary = getPrivacySummary(currentState, PRIVACY_CATALOG).data;
@@ -123,7 +131,7 @@ export default function PrivacyControlCenter() {
 
   function handleReset(): void {
     const resetState = privacyStateStore.reset();
-    setSelectedCategoryId("activity_history");
+    uiInspectionStore.reset();
     const resetSummary = getPrivacySummary(resetState, PRIVACY_CATALOG).data;
     setFeedback(
       `Demo reset to the canonical account: ${resetSummary.privacyScore}/100 and live state v${resetSummary.stateVersion}.`,
@@ -230,6 +238,7 @@ export default function PrivacyControlCenter() {
         </div>
 
         <PrivacyOverview
+          agentInspected={inspection.tool === "get_privacy_summary"}
           catalog={PRIVACY_CATALOG}
           optionalCategoryCount={optionalCategoryCount}
           summary={summary}
@@ -250,9 +259,16 @@ export default function PrivacyControlCenter() {
                 All eight categories are shown below. Required processing is protected; optional processing can be changed directly by a human.
               </p>
             </div>
-            <p className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
-              {summary.requiredProcessingCount} required · {optionalCategoryCount} optional
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {inspection.tool === "get_consent_state" ? (
+                <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800">
+                  Agent inspected current controls
+                </span>
+              ) : null}
+              <p className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                {summary.requiredProcessingCount} required · {optionalCategoryCount} optional
+              </p>
+            </div>
           </div>
 
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.08fr)_minmax(20rem,0.92fr)] lg:items-start">
@@ -263,7 +279,7 @@ export default function PrivacyControlCenter() {
                   catalog={PRIVACY_CATALOG}
                   enabled={currentState.categories[category.id].consentState !== "disabled"}
                   key={category.id}
-                  onSelect={() => setSelectedCategoryId(category.id)}
+                  onSelect={() => uiInspectionStore.selectCategory(category.id)}
                   onToggle={() => handleToggle(category.id)}
                   selected={category.id === selectedCategory.id}
                 />
@@ -271,6 +287,10 @@ export default function PrivacyControlCenter() {
             </div>
 
             <CategoryDetailPanel
+              agentInspected={
+                inspection.tool === "explain_data_use" &&
+                inspection.categoryId === selectedCategory.id
+              }
               category={selectedCategory}
               catalog={PRIVACY_CATALOG}
               state={currentState}
@@ -282,6 +302,7 @@ export default function PrivacyControlCenter() {
           <DataUseMap
             category={selectedCategory}
             catalog={PRIVACY_CATALOG}
+            inspection={inspection}
             state={currentState}
           />
         </div>

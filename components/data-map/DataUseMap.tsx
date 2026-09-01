@@ -1,22 +1,38 @@
-import { isProcessingEnabled } from "@/lib/privacy/engine";
+import { getDataMap } from "@/lib/privacy/engine";
 import type {
   DataCategoryDefinition,
   PrivacyAccountState,
   PrivacyCatalog,
 } from "@/lib/privacy/types";
+import type { UiInspectionState } from "@/lib/state/inspection-store";
 
 interface DataUseMapProps {
   readonly category: DataCategoryDefinition;
   readonly catalog: PrivacyCatalog;
+  readonly inspection: UiInspectionState;
   readonly state: PrivacyAccountState;
 }
 
 export default function DataUseMap({
   category,
   catalog,
+  inspection,
   state,
 }: DataUseMapProps) {
-  const active = isProcessingEnabled(state, category.id, catalog);
+  const dataMap = getDataMap(state, catalog);
+  const categoryNode = dataMap.categories.find(
+    (dataCategory) => dataCategory.id === category.id,
+  );
+  const active = categoryNode?.status === "active";
+  const purposeRelationships = dataMap.relationships.filter(
+    (relationship) =>
+      relationship.dataCategoryId === category.id &&
+      relationship.relationshipType === "category_to_purpose",
+  );
+  const agentInspected =
+    inspection.tool === "get_data_map" ||
+    (inspection.tool === "explain_data_use" &&
+      inspection.categoryId === category.id);
 
   return (
     <section
@@ -36,6 +52,11 @@ export default function DataUseMap({
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs font-medium">
+            {agentInspected ? (
+              <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-violet-800">
+                Agent inspected this map
+              </span>
+            ) : null}
             <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-800">
               Active current path
             </span>
@@ -77,23 +98,26 @@ export default function DataUseMap({
         </div>
 
         <ol className="space-y-3" aria-label={`${category.name} data-use relationships`}>
-          {category.purposeIds.map((purposeId) => {
-            const purpose = catalog.purposes[purposeId];
+          {purposeRelationships.map((purposeRelationship) => {
+            const purpose = dataMap.purposes.find(
+              (definition) => definition.id === purposeRelationship.purposeId,
+            );
             if (!purpose) {
               return null;
             }
 
-            const dependencies = category.featureDependencies.filter(
-              (dependency) => dependency.purposeId === purposeId,
+            const dependencies = dataMap.relationships.filter(
+              (relationship) =>
+                relationship.dataCategoryId === category.id &&
+                relationship.purposeId === purpose.id &&
+                relationship.relationshipType === "purpose_to_capability",
             );
-            const destinations = category.sharedWith.flatMap((destination) => {
-              if (!destination.purposeIds.includes(purposeId)) {
-                return [];
-              }
-
-              const recipient = catalog.recipients[destination.recipientId];
-              return recipient ? [{ recipient, destination }] : [];
-            });
+            const destinations = dataMap.relationships.filter(
+              (relationship) =>
+                relationship.dataCategoryId === category.id &&
+                relationship.purposeId === purpose.id &&
+                relationship.relationshipType === "category_to_recipient",
+            );
 
             return (
               <li
@@ -102,7 +126,7 @@ export default function DataUseMap({
                     ? "border-slate-200 bg-white"
                     : "border-dashed border-slate-200 bg-slate-50/80 opacity-80"
                 }`}
-                key={purposeId}
+                key={purpose.id}
               >
                 <div className="grid gap-4 sm:grid-cols-[minmax(9rem,0.7fr)_minmax(0,1.3fr)] sm:items-start">
                   <div>
@@ -118,9 +142,17 @@ export default function DataUseMap({
                     <FlowEndpoint label="Product capability">
                       {dependencies.length > 0 ? (
                         dependencies.map((dependency) => {
-                          const capability = catalog.capabilities[dependency.capabilityId];
+                          const capability = dependency.capabilityId
+                            ? dataMap.capabilities.find(
+                                (definition) =>
+                                  definition.id === dependency.capabilityId,
+                              )
+                            : undefined;
                           return capability ? (
-                            <FlowBadge key={dependency.capabilityId} muted={!active}>
+                            <FlowBadge
+                              key={dependency.id}
+                              muted={dependency.status === "paused"}
+                            >
                               {capability.name}
                             </FlowBadge>
                           ) : null;
@@ -131,18 +163,26 @@ export default function DataUseMap({
                     </FlowEndpoint>
                     <FlowEndpoint label="Recipient">
                       {destinations.length > 0 ? (
-                        destinations.map(({ recipient }) => (
-                          <FlowBadge
-                            key={recipient.id}
-                            muted={!active}
-                            external={recipient.kind === "third_party"}
-                          >
-                            {recipient.name}
-                            <span className="ml-1 font-normal">
-                              · {active ? "active" : "paused"}
-                            </span>
-                          </FlowBadge>
-                        ))
+                        destinations.map((destination) => {
+                          const recipient = destination.recipientId
+                            ? dataMap.recipients.find(
+                                (definition) =>
+                                  definition.id === destination.recipientId,
+                              )
+                            : undefined;
+                          return recipient ? (
+                            <FlowBadge
+                              key={destination.id}
+                              muted={destination.status === "paused"}
+                              external={recipient.kind === "third_party"}
+                            >
+                              {recipient.name}
+                              <span className="ml-1 font-normal">
+                                · {destination.status}
+                              </span>
+                            </FlowBadge>
+                          ) : null;
+                        })
                       ) : (
                         <span className="text-xs text-slate-500">No recipient listed</span>
                       )}

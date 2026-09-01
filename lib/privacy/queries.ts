@@ -2,6 +2,7 @@ import { PRIVACY_CATALOG } from "./catalog.ts";
 import { SEEDED_PRIVACY_STATE } from "./seed.ts";
 import type {
   CapabilityDefinition,
+  DataMapRelationship,
   DataCategoryDefinition,
   DataCategoryId,
   DataSharingRelationship,
@@ -9,6 +10,7 @@ import type {
   PrivacyAccountState,
   PrivacyCatalog,
   PrivacyCategoryStateView,
+  PrivacyDataMap,
   ProcessingConsequence,
   PurposeDefinition,
   RecipientId,
@@ -151,6 +153,125 @@ export function getConsentState(
     required: category.processingRequirement === "required",
     controllable: category.controllable,
   }));
+}
+
+export function getRequiredProcessingReason(
+  categoryId: string,
+  catalog: PrivacyCatalog = PRIVACY_CATALOG,
+): string | null {
+  const category = getDataCategory(categoryId, catalog);
+  if (!category || category.processingRequirement !== "required") {
+    return null;
+  }
+
+  const dependencyDescriptions = category.featureDependencies.map(
+    (dependency) => dependency.description,
+  );
+
+  return dependencyDescriptions.length > 0
+    ? dependencyDescriptions.join(" ")
+    : "This processing is required for the service to operate.";
+}
+
+export function getDataMap(
+  state: PrivacyAccountState = SEEDED_PRIVACY_STATE,
+  catalog: PrivacyCatalog = PRIVACY_CATALOG,
+): PrivacyDataMap {
+  const categories = getAllDataCategories(catalog);
+  const relationships: DataMapRelationship[] = [];
+
+  for (const category of categories) {
+    const status = isProcessingEnabled(state, category.id, catalog)
+      ? "active"
+      : "paused";
+
+    for (const purposeId of category.purposeIds) {
+      if (!catalog.purposes[purposeId]) {
+        continue;
+      }
+
+      relationships.push({
+        id: `${category.id}:purpose:${purposeId}`,
+        relationshipType: "category_to_purpose",
+        dataCategoryId: category.id,
+        purposeId,
+        capabilityId: null,
+        recipientId: null,
+        dependencyStrength: null,
+        dependencyImpact: null,
+        status,
+      });
+
+      for (const dependency of category.featureDependencies) {
+        if (
+          dependency.purposeId !== purposeId ||
+          !catalog.capabilities[dependency.capabilityId]
+        ) {
+          continue;
+        }
+
+        relationships.push({
+          id: `${category.id}:purpose:${purposeId}:capability:${dependency.capabilityId}`,
+          relationshipType: "purpose_to_capability",
+          dataCategoryId: category.id,
+          purposeId,
+          capabilityId: dependency.capabilityId,
+          recipientId: null,
+          dependencyStrength: dependency.strength,
+          dependencyImpact: dependency.impact,
+          status,
+        });
+      }
+
+      for (const destination of category.sharedWith) {
+        if (
+          !destination.purposeIds.includes(purposeId) ||
+          !catalog.recipients[destination.recipientId]
+        ) {
+          continue;
+        }
+
+        relationships.push({
+          id: `${category.id}:purpose:${purposeId}:recipient:${destination.recipientId}`,
+          relationshipType: "category_to_recipient",
+          dataCategoryId: category.id,
+          purposeId,
+          capabilityId: null,
+          recipientId: destination.recipientId,
+          dependencyStrength: null,
+          dependencyImpact: null,
+          status,
+        });
+      }
+    }
+  }
+
+  return {
+    stateVersion: state.stateVersion,
+    categories: categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      status: isProcessingEnabled(state, category.id, catalog)
+        ? "active"
+        : "paused",
+    })),
+    purposes: Object.values(catalog.purposes).map((purpose) => ({
+      id: purpose.id,
+      name: purpose.name,
+      description: purpose.description,
+    })),
+    capabilities: Object.values(catalog.capabilities).map((capability) => ({
+      id: capability.id,
+      name: capability.name,
+      description: capability.description,
+    })),
+    recipients: Object.values(catalog.recipients).map((recipient) => ({
+      id: recipient.id,
+      name: recipient.name,
+      kind: recipient.kind,
+    })),
+    relationships,
+  };
 }
 
 export function getEnabledOptionalProcessing(
