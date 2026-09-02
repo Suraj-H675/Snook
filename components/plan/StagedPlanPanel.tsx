@@ -1,4 +1,5 @@
 import { getStagedPlanValidity } from "@/lib/state/staged-plan-store";
+import type { ApprovalValidity } from "@/lib/approval/types";
 import type {
   ConsentChange,
   DataCategoryDefinition,
@@ -10,6 +11,7 @@ import type {
   StagedConsentPlan,
 } from "@/lib/plans/types";
 import PlanChangeRow from "./PlanChangeRow";
+import ApprovalPanel from "./ApprovalPanel";
 
 interface StagedPlanPanelProps {
   readonly plan: StagedConsentPlan;
@@ -22,6 +24,10 @@ interface StagedPlanPanelProps {
     changes: readonly ConsentChange[],
   ) => void;
   readonly onDiscard: () => void;
+  readonly approvalValidity: ApprovalValidity;
+  readonly approvalMessage: string | null;
+  readonly onApprove: () => void;
+  readonly onUntrustedApproval: () => void;
 }
 
 function formatDelta(delta: number): string {
@@ -59,6 +65,10 @@ export default function StagedPlanPanel({
   editPending,
   onEdit,
   onDiscard,
+  approvalValidity,
+  approvalMessage,
+  onApprove,
+  onUntrustedApproval,
 }: StagedPlanPanelProps) {
   const validity = getStagedPlanValidity(plan, actualState.stateVersion);
   const stale = validity === "stale";
@@ -99,7 +109,7 @@ export default function StagedPlanPanel({
               Staged privacy plan
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-700">
-              Review and edit the proposed category changes below. This is shared review state, separate from your live account settings.
+              Review and edit the proposed category changes below. This is shared review state, separate from your live account settings. Approval is a separate human action.
             </p>
           </div>
           <span className="rounded-full border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900">
@@ -260,6 +270,15 @@ export default function StagedPlanPanel({
             Discard staged plan
           </button>
         </div>
+
+        <ApprovalPanel
+          disabled={stale || editPending}
+          message={approvalMessage}
+          onApprove={onApprove}
+          onUntrustedApproval={onUntrustedApproval}
+          plan={plan}
+          validity={approvalValidity}
+        />
       </div>
     </section>
   );

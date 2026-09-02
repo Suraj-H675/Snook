@@ -1,6 +1,14 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  getApprovalBinding,
+} from "@/lib/approval/approval";
+import type { ApprovalValidity } from "@/lib/approval/types";
+import {
+  approvalStore,
+  getInitialApprovalState,
+} from "@/lib/state/approval-store";
 import { getAllDataCategories, getDataCategory, getPrivacySummary } from "@/lib/privacy/engine";
 import { PRIVACY_CATALOG } from "@/lib/privacy/catalog";
 import { SEEDED_PRIVACY_STATE } from "@/lib/privacy/seed";
@@ -33,7 +41,7 @@ type PageStatus = "checking" | WebMcpRegistrationResult["status"];
 function statusLabel(status: PageStatus): string {
   switch (status) {
     case "registered":
-      return "Browser agent connected · six tools ready";
+      return "Browser agent connected · seven tools ready";
     case "unavailable":
       return "WebMCP unavailable in this browser";
     case "error":
@@ -72,6 +80,11 @@ export default function PrivacyControlCenter() {
     stagedPlanStore.getSnapshot,
     getInitialStagedPlanState,
   );
+  const approvalState = useSyncExternalStore(
+    approvalStore.subscribe,
+    approvalStore.getState,
+    getInitialApprovalState,
+  );
   const [status, setStatus] = useState<PageStatus>("checking");
   const [statusReason, setStatusReason] = useState(
     "The page checks for WebMCP after the human interface is ready.",
@@ -81,6 +94,7 @@ export default function PrivacyControlCenter() {
     "Choose any optional setting to see the posture and data-use map update instantly.",
   );
   const [planEditPending, setPlanEditPending] = useState(false);
+  const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
 
   const categories = getAllDataCategories(PRIVACY_CATALOG);
   const optionalCategoryCount = categories.filter(
@@ -90,6 +104,14 @@ export default function PrivacyControlCenter() {
   const selectedCategory =
     getDataCategory(selectedCategoryId, PRIVACY_CATALOG) ?? categories[0];
   const summary = getPrivacySummary(currentState, PRIVACY_CATALOG).data;
+  const approvalValidity: ApprovalValidity = stagedPlanState.plan
+    ? approvalState.grant === null
+      ? { status: "none", grant: null }
+      : approvalStore.getValidity(
+          getApprovalBinding(stagedPlanState.plan),
+          currentState.stateVersion,
+        )
+    : { status: "none", grant: null };
 
   useEffect(() => {
     let isMounted = true;
@@ -98,11 +120,20 @@ export default function PrivacyControlCenter() {
     // render share the same persisted current state.
     getPrivacyStateStore().hydrate();
 
-    void registerWebMcpTools(() => {
-      if (isMounted) {
-        setInvocationCount((count) => count + 1);
-      }
-    }).then((result) => {
+    void registerWebMcpTools(
+      () => {
+        if (isMounted) {
+          setInvocationCount((count) => count + 1);
+        }
+      },
+      () => {
+        if (isMounted) {
+          setFeedback(
+            "Approved plan applied. Actual privacy settings and score are updated. No receipt was generated in this phase.",
+          );
+        }
+      },
+    ).then((result) => {
       if (!isMounted) {
         return;
       }
@@ -110,7 +141,7 @@ export default function PrivacyControlCenter() {
       setStatus(result.status);
       setStatusReason(
         result.status === "registered"
-          ? "The agent can inspect, preview, and stage proposals against the same live state shown here."
+          ? "The agent can inspect, preview, stage, and apply only an exact plan approved here."
           : result.reason,
       );
     });
@@ -148,6 +179,7 @@ export default function PrivacyControlCenter() {
     }
 
     setPlanEditPending(true);
+    setApprovalFeedback(null);
     try {
       const result = await stagedPlanStore.edit(
         { changes },
@@ -176,13 +208,74 @@ export default function PrivacyControlCenter() {
 
   function handleDiscardPlan(): void {
     stagedPlanStore.discard();
+    approvalStore.clear();
+    setApprovalFeedback(null);
     setFeedback("Staged plan discarded. Your actual account settings were not changed.");
+  }
+
+  function handleApprovePlan(): void {
+    const plan = stagedPlanStore.getState().plan;
+    const state = privacyStateStore.getState();
+    if (!plan) {
+      setApprovalFeedback("There is no staged plan to approve.");
+      return;
+    }
+
+    if (plan.baseStateVersion !== state.stateVersion) {
+      setApprovalFeedback(
+        "This plan is stale because the actual account changed. Restage it before approving.",
+      );
+      return;
+    }
+
+    if (
+      plan.changes.length === 0 ||
+      plan.revision < 1 ||
+      plan.baseStateVersion < 1 ||
+      !/^[0-9a-f]{64}$/.test(plan.planHash)
+    ) {
+      setApprovalFeedback(
+        "This plan cannot be approved until its valid changes and fingerprint are available.",
+      );
+      return;
+    }
+
+    const binding = getApprovalBinding(plan);
+    if (
+      approvalStore.getValidity(binding, state.stateVersion).status === "current"
+    ) {
+      setApprovalFeedback("This exact plan is already approved for agent application.");
+      return;
+    }
+
+    try {
+      approvalStore.createApproval(binding);
+      setApprovalFeedback(null);
+      setFeedback(
+        `Plan ${plan.planId} revision ${plan.revision} is approved for agent application. Your actual account settings remain unchanged until the agent applies it.`,
+      );
+    } catch (error) {
+      setApprovalFeedback(
+        error instanceof Error
+          ? error.message
+          : "The website could not create an approval for this plan.",
+      );
+    }
+  }
+
+  function handleUntrustedApproval(): void {
+    const message =
+      "Approval must come from a trusted human interaction with this website. No approval was created.";
+    setApprovalFeedback(message);
+    setFeedback(message);
   }
 
   function handleReset(): void {
     const resetState = privacyStateStore.reset();
     stagedPlanStore.reset();
+    approvalStore.reset();
     uiInspectionStore.reset();
+    setApprovalFeedback(null);
     const resetSummary = getPrivacySummary(resetState, PRIVACY_CATALOG).data;
     setFeedback(
       `Demo reset to the canonical account: ${resetSummary.privacyScore}/100 and live state v${resetSummary.stateVersion}.`,
@@ -275,7 +368,7 @@ export default function PrivacyControlCenter() {
               Optional settings persist across reloads for this demo. Reset returns everything to the known starting point.
             </p>
             <p className="mt-4 border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500">
-              The browser agent can inspect, preview, and stage proposals. Actual privacy changes here remain directly human-controlled.
+              The browser agent can inspect, preview, and stage proposals. Consequential changes require your explicit approval here before agent application.
             </p>
           </div>
         </section>
@@ -307,6 +400,10 @@ export default function PrivacyControlCenter() {
               onEdit={(changes) => {
                 void handlePlanEdit(changes);
               }}
+              approvalMessage={approvalFeedback}
+              approvalValidity={approvalValidity}
+              onApprove={handleApprovePlan}
+              onUntrustedApproval={handleUntrustedApproval}
               plan={stagedPlanState.plan}
             />
           </div>
@@ -379,7 +476,7 @@ export default function PrivacyControlCenter() {
           <p>
             Snook · live privacy state v{summary.stateVersion} · {invocationCount} WebMCP {invocationCount === 1 ? "call" : "calls"} observed
           </p>
-          <p>Agent proposals are staged only. Actual privacy changes remain human-controlled.</p>
+          <p>Agent proposals require explicit website approval before actual changes can be applied.</p>
         </footer>
       </main>
     </div>

@@ -90,11 +90,12 @@ function assertSuccess<T extends { ok: true; data: unknown }>(
   assert.equal(result.ok, true);
 }
 
-test("Phase 4 inventory contains exactly six tools with honest side effects", () => {
+test("Phase 5 inventory contains exactly seven tools with honest side effects", () => {
   const { tools } = createTestRuntime();
   const names = tools.map((tool) => tool.name);
 
   assert.deepEqual(names, [
+    "apply_approved_consent_plan",
     "explain_data_use",
     "get_consent_state",
     "get_data_map",
@@ -103,14 +104,21 @@ test("Phase 4 inventory contains exactly six tools with honest side effects", ()
     "stage_consent_plan",
   ]);
   assert.deepEqual(names, WEBMCP_TOOL_NAMES);
-  assert.equal(new Set(names).size, 6);
+  assert.equal(new Set(names).size, 7);
 
-  for (const tool of tools.slice(0, 5)) {
+  for (const tool of tools.filter(
+    (candidate) => candidate.name !== "stage_consent_plan" &&
+      candidate.name !== "apply_approved_consent_plan",
+  )) {
     assert.deepEqual(tool.annotations, { readOnlyHint: true });
     assert.equal("untrustedContentHint" in (tool.annotations ?? {}), false);
   }
   assert.deepEqual(
     tools.find((tool) => tool.name === "stage_consent_plan")?.annotations,
+    { readOnlyHint: false },
+  );
+  assert.deepEqual(
+    tools.find((tool) => tool.name === "apply_approved_consent_plan")?.annotations,
     { readOnlyHint: false },
   );
 
@@ -168,6 +176,20 @@ test("Phase 4 inventory contains exactly six tools with honest side effects", ()
       additionalProperties: false,
     });
   }
+  assert.deepEqual(
+    findTool(tools, "apply_approved_consent_plan").inputSchema,
+    {
+      type: "object",
+      properties: {
+        planId: { type: "string", minLength: 1 },
+        revision: { type: "integer", minimum: 1 },
+        planHash: { type: "string", pattern: "^[0-9a-f]{64}$" },
+        baseStateVersion: { type: "integer", minimum: 1 },
+      },
+      required: ["planId", "revision", "planHash", "baseStateVersion"],
+      additionalProperties: false,
+    },
+  );
 });
 
 test("get_privacy_summary preserves its compatible contract and reads live state", async () => {
@@ -576,7 +598,46 @@ test("central registration registers the inventory once for a model context", as
     assert.equal(first.status, "registered");
     assert.equal(second.status, "registered");
     assert.deepEqual(registeredTools.map((tool) => tool.name), WEBMCP_TOOL_NAMES);
-    assert.equal(registeredTools.length, 6);
+    assert.equal(registeredTools.length, 7);
+  } finally {
+    if (previousDocument === undefined) {
+      delete (globalThis as { document?: Document }).document;
+    } else {
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: previousDocument,
+      });
+    }
+
+    if (previousWindow === undefined) {
+      delete (globalThis as { window?: Window }).window;
+    } else {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: previousWindow,
+      });
+    }
+  }
+});
+
+test("normal browser registration remains unavailable without WebMCP", async () => {
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {},
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {},
+  });
+
+  try {
+    assert.deepEqual(await registerWebMcpTools(), {
+      status: "unavailable",
+      reason: "document.modelContext is not available in this browser.",
+    });
   } finally {
     if (previousDocument === undefined) {
       delete (globalThis as { document?: Document }).document;

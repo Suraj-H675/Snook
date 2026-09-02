@@ -47,3 +47,27 @@ export const CONSENT_PLAN_INPUT_SCHEMA = {
   required: ["changes"],
   additionalProperties: false,
 } as const;
+
+export const APPLY_APPROVED_CONSENT_PLAN_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    planId: {
+      type: "string",
+      minLength: 1,
+    },
+    revision: {
+      type: "integer",
+      minimum: 1,
+    },
+    planHash: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+    },
+    baseStateVersion: {
+      type: "integer",
+      minimum: 1,
+    },
+  },
+  required: ["planId", "revision", "planHash", "baseStateVersion"],
+  additionalProperties: false,
+} as const;

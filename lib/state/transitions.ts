@@ -143,17 +143,20 @@ export function setCategoryConsentState(
 }
 
 /**
- * Apply a previously validated set of category changes to an immutable
- * working state. Each individual transition reuses the same invariant checks
- * as the direct human control path; callers decide whether the returned state
- * should be committed to a real store.
+ * Apply a set of category changes as one immutable logical transaction.
+ * Each individual transition reuses the same invariant checks as the direct
+ * human control path, while the returned account version advances only once.
+ * Callers decide whether the returned state should be committed to a store.
  */
 export function applyConsentChanges(
   state: PrivacyAccountState,
   changes: readonly ConsentChange[],
   catalog: PrivacyCatalog = PRIVACY_CATALOG,
 ): PrivacyBatchTransitionResult {
-  let nextState = state;
+  let nextState: PrivacyAccountState = {
+    stateVersion: state.stateVersion,
+    categories: state.categories,
+  };
 
   for (const change of changes) {
     const result = setCategoryConsentState(
@@ -170,8 +173,19 @@ export function applyConsentChanges(
       };
     }
 
-    nextState = result.state;
+    // Keep the original version while validating the remaining changes. The
+    // final account version is assigned once after every change succeeds.
+    nextState = {
+      stateVersion: state.stateVersion,
+      categories: result.state.categories,
+    };
   }
 
-  return { ok: true, state: nextState };
+  return {
+    ok: true,
+    state: {
+      stateVersion: state.stateVersion + (changes.length > 0 ? 1 : 0),
+      categories: nextState.categories,
+    },
+  };
 }

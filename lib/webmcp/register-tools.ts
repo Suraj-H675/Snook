@@ -3,7 +3,12 @@ import type {
   PrivacyAccountState,
 } from "../privacy/types.ts";
 import { uiInspectionStore } from "../state/inspection-store.ts";
+import {
+  getApprovalStore,
+  type ApprovalStore,
+} from "../state/approval-store.ts";
 import { getPrivacyStateStore } from "../state/store.ts";
+import type { PrivacyStateStore } from "../state/store.ts";
 import type { ReadToolInspectionRecorder } from "./tool-context.ts";
 import {
   EXPLAIN_DATA_USE_TOOL_NAME,
@@ -17,6 +22,9 @@ import { createPrivacySummaryTool } from "./tools/get-privacy-summary.ts";
 import { createExplainDataUseTool } from "./tools/explain-data-use.ts";
 import { createPreviewConsentPlanTool } from "./tools/preview-consent-plan.ts";
 import { createStageConsentPlanTool } from "./tools/stage-consent-plan.ts";
+import {
+  createApplyApprovedConsentPlanTool,
+} from "./tools/apply-approved-consent-plan.ts";
 import type { StagedPlanStore } from "../state/staged-plan-store.ts";
 
 export type WebMcpRegistrationResult =
@@ -35,19 +43,33 @@ export type WebMcpRegistrationResult =
 
 export interface WebMcpToolFactoryOptions {
   readonly onToolInvoked?: () => void;
+  readonly onPlanApplied?: () => void;
   readonly getState?: () => PrivacyAccountState;
   readonly recordInspection?: ReadToolInspectionRecorder;
   readonly stagedPlanStore?: StagedPlanStore;
+  readonly privacyStateStore?: PrivacyStateStore;
+  readonly approvalStore?: ApprovalStore;
 }
 
 /**
- * The central Phase 4 inventory. Keeping construction here makes the
+ * The central Phase 5 inventory. Keeping construction here makes the
  * registered surface auditable and prevents component-level registrations.
  */
 export function createWebMcpTools(
   options: WebMcpToolFactoryOptions = {},
 ): readonly WebMCP.ModelContextTool[] {
+  const privacyStateStore = options.privacyStateStore ?? getPrivacyStateStore();
+  const stagedPlanStore = options.stagedPlanStore;
+  const approvalStore = options.approvalStore ?? getApprovalStore();
+
   return [
+    createApplyApprovedConsentPlanTool({
+      onInvoked: options.onToolInvoked,
+      onApplied: options.onPlanApplied,
+      privacyStateStore,
+      stagedPlanStore,
+      approvalStore,
+    }),
     createExplainDataUseTool(
       options.onToolInvoked,
       options.getState,
@@ -75,7 +97,7 @@ export function createWebMcpTools(
     createStageConsentPlanTool(
       options.onToolInvoked,
       options.getState,
-      options.stagedPlanStore,
+      stagedPlanStore,
     ),
   ];
 }
@@ -84,6 +106,7 @@ interface RegistrationRecord {
   readonly modelContext: WebMCP.ModelContext;
   promise: Promise<void>;
   onToolInvoked?: () => void;
+  onPlanApplied?: () => void;
 }
 
 interface WindowWithRegistration extends Window {
@@ -118,6 +141,7 @@ async function registerToolInventory(
 
 export async function registerWebMcpTools(
   onToolInvoked?: () => void,
+  onPlanApplied?: () => void,
 ): Promise<WebMcpRegistrationResult> {
   if (typeof document === "undefined") {
     return {
@@ -147,6 +171,7 @@ export async function registerWebMcpTools(
 
   if (existingRegistration?.modelContext === modelContext) {
     existingRegistration.onToolInvoked = onToolInvoked;
+    existingRegistration.onPlanApplied = onPlanApplied;
 
     try {
       await existingRegistration.promise;
@@ -166,6 +191,7 @@ export async function registerWebMcpTools(
     modelContext,
     promise: Promise.resolve(),
     onToolInvoked,
+    onPlanApplied,
   };
   browserWindow.__snookPhase0WebMcpRegistration = registration;
 
@@ -180,6 +206,7 @@ export async function registerWebMcpTools(
     };
     const tools = createWebMcpTools({
       onToolInvoked: () => registration.onToolInvoked?.(),
+      onPlanApplied: () => registration.onPlanApplied?.(),
       getState,
       recordInspection,
     });

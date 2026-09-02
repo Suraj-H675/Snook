@@ -1,16 +1,21 @@
 import { PRIVACY_CATALOG } from "../privacy/catalog.ts";
 import { getSeededPrivacyState } from "../privacy/seed.ts";
-import { setCategoryConsentState } from "./transitions.ts";
+import {
+  applyConsentChanges,
+  setCategoryConsentState,
+} from "./transitions.ts";
 import {
   parsePersistedPrivacyState,
   PRIVACY_STATE_STORAGE_KEY,
   serializePrivacyState,
 } from "./persistence.ts";
 import type {
+  ConsentChange,
   PrivacyAccountState,
   PrivacyCatalog,
 } from "../privacy/types.ts";
 import type {
+  PrivacyBatchTransitionResult,
   PrivacyTransitionResult,
 } from "./transitions.ts";
 
@@ -31,6 +36,9 @@ export interface PrivacyStateStore {
     categoryId: string,
     desiredState: string,
   ) => PrivacyTransitionResult;
+  readonly applyConsentChanges: (
+    changes: readonly ConsentChange[],
+  ) => PrivacyBatchTransitionResult;
   readonly reset: () => PrivacyAccountState;
   readonly hydrate: () => void;
 }
@@ -122,6 +130,20 @@ export function createPrivacyStateStore(
     return result;
   }
 
+  function updateConsentChanges(
+    changes: readonly ConsentChange[],
+  ): PrivacyBatchTransitionResult {
+    const result = applyConsentChanges(state, changes, catalog);
+    if (!result.ok) {
+      return result;
+    }
+
+    state = result.state;
+    persist(state);
+    notify();
+    return result;
+  }
+
   function reset(): PrivacyAccountState {
     state = getSeededPrivacyState();
     persist(state);
@@ -165,6 +187,7 @@ export function createPrivacyStateStore(
     getState,
     subscribe,
     setCategoryConsentState: updateCategory,
+    applyConsentChanges: updateConsentChanges,
     reset,
     hydrate,
   };
