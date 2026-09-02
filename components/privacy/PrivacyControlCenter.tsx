@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { getAllDataCategories, getDataCategory, getPrivacySummary } from "@/lib/privacy/engine";
 import { PRIVACY_CATALOG } from "@/lib/privacy/catalog";
 import { SEEDED_PRIVACY_STATE } from "@/lib/privacy/seed";
-import type { DataCategoryId } from "@/lib/privacy/types";
+import type { ConsentChange, DataCategoryId } from "@/lib/privacy/types";
 import {
   getInitialUiInspectionState,
   uiInspectionStore,
@@ -14,6 +14,10 @@ import {
   privacyStateStore,
 } from "@/lib/state/store";
 import {
+  getInitialStagedPlanState,
+  stagedPlanStore,
+} from "@/lib/state/staged-plan-store";
+import {
   registerWebMcpTools,
   type WebMcpRegistrationResult,
 } from "@/lib/webmcp/register-tools";
@@ -22,13 +26,14 @@ import ResetDemoButton from "@/components/demo/ResetDemoButton";
 import CategoryDetailPanel from "./CategoryDetailPanel";
 import PrivacyCategoryCard from "./PrivacyCategoryCard";
 import PrivacyOverview from "./PrivacyOverview";
+import StagedPlanPanel from "@/components/plan/StagedPlanPanel";
 
 type PageStatus = "checking" | WebMcpRegistrationResult["status"];
 
 function statusLabel(status: PageStatus): string {
   switch (status) {
     case "registered":
-      return "Browser agent connected · read-only tool ready";
+      return "Browser agent connected · six tools ready";
     case "unavailable":
       return "WebMCP unavailable in this browser";
     case "error":
@@ -62,6 +67,11 @@ export default function PrivacyControlCenter() {
     uiInspectionStore.getState,
     getInitialUiInspectionState,
   );
+  const stagedPlanState = useSyncExternalStore(
+    stagedPlanStore.subscribe,
+    stagedPlanStore.getSnapshot,
+    getInitialStagedPlanState,
+  );
   const [status, setStatus] = useState<PageStatus>("checking");
   const [statusReason, setStatusReason] = useState(
     "The page checks for WebMCP after the human interface is ready.",
@@ -70,6 +80,7 @@ export default function PrivacyControlCenter() {
   const [feedback, setFeedback] = useState(
     "Choose any optional setting to see the posture and data-use map update instantly.",
   );
+  const [planEditPending, setPlanEditPending] = useState(false);
 
   const categories = getAllDataCategories(PRIVACY_CATALOG);
   const optionalCategoryCount = categories.filter(
@@ -99,7 +110,7 @@ export default function PrivacyControlCenter() {
       setStatus(result.status);
       setStatusReason(
         result.status === "registered"
-          ? "get_privacy_summary can read the same live state shown on this page."
+          ? "The agent can inspect, preview, and stage proposals against the same live state shown here."
           : result.reason,
       );
     });
@@ -129,8 +140,48 @@ export default function PrivacyControlCenter() {
     );
   }
 
+  async function handlePlanEdit(
+    changes: readonly ConsentChange[],
+  ): Promise<void> {
+    if (planEditPending) {
+      return;
+    }
+
+    setPlanEditPending(true);
+    try {
+      const result = await stagedPlanStore.edit(
+        { changes },
+        privacyStateStore.getState(),
+      );
+
+      if (!result.ok) {
+        setFeedback(result.error.message);
+      } else if (result.data === null) {
+        setFeedback("The staged plan is empty, so it was cleared. Your actual account settings were not changed.");
+      } else {
+        setFeedback(
+          `Staged plan ${result.data.planId} updated to revision ${result.data.revision}. Nothing has been applied to your account.`,
+        );
+      }
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "The staged plan could not be updated.",
+      );
+    } finally {
+      setPlanEditPending(false);
+    }
+  }
+
+  function handleDiscardPlan(): void {
+    stagedPlanStore.discard();
+    setFeedback("Staged plan discarded. Your actual account settings were not changed.");
+  }
+
   function handleReset(): void {
     const resetState = privacyStateStore.reset();
+    stagedPlanStore.reset();
     uiInspectionStore.reset();
     const resetSummary = getPrivacySummary(resetState, PRIVACY_CATALOG).data;
     setFeedback(
@@ -224,7 +275,7 @@ export default function PrivacyControlCenter() {
               Optional settings persist across reloads for this demo. Reset returns everything to the known starting point.
             </p>
             <p className="mt-4 border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500">
-              The current browser integration is read-only: the agent may inspect this state, while optional changes here are made directly by you.
+              The browser agent can inspect, preview, and stage proposals. Actual privacy changes here remain directly human-controlled.
             </p>
           </div>
         </section>
@@ -243,6 +294,23 @@ export default function PrivacyControlCenter() {
           optionalCategoryCount={optionalCategoryCount}
           summary={summary}
         />
+
+        {stagedPlanState.plan ? (
+          <div className="mt-8">
+            <StagedPlanPanel
+              actualState={currentState}
+              catalog={PRIVACY_CATALOG}
+              categories={categories}
+              editPending={planEditPending}
+              currentPrivacyScore={summary.privacyScore}
+              onDiscard={handleDiscardPlan}
+              onEdit={(changes) => {
+                void handlePlanEdit(changes);
+              }}
+              plan={stagedPlanState.plan}
+            />
+          </div>
+        ) : null}
 
         <section
           aria-labelledby="controls-heading"
@@ -309,9 +377,9 @@ export default function PrivacyControlCenter() {
 
         <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 py-5 text-xs text-slate-500">
           <p>
-            Snook · live privacy state v{summary.stateVersion} · {invocationCount} read-only tool {invocationCount === 1 ? "call" : "calls"} observed
+            Snook · live privacy state v{summary.stateVersion} · {invocationCount} WebMCP {invocationCount === 1 ? "call" : "calls"} observed
           </p>
-          <p>Optional changes are human UI actions. No agent mutation is exposed in this phase.</p>
+          <p>Agent proposals are staged only. Actual privacy changes remain human-controlled.</p>
         </footer>
       </main>
     </div>

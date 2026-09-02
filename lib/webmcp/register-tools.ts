@@ -15,6 +15,9 @@ import { createConsentStateTool } from "./tools/get-consent-state.ts";
 import { createDataMapTool } from "./tools/get-data-map.ts";
 import { createPrivacySummaryTool } from "./tools/get-privacy-summary.ts";
 import { createExplainDataUseTool } from "./tools/explain-data-use.ts";
+import { createPreviewConsentPlanTool } from "./tools/preview-consent-plan.ts";
+import { createStageConsentPlanTool } from "./tools/stage-consent-plan.ts";
+import type { StagedPlanStore } from "../state/staged-plan-store.ts";
 
 export type WebMcpRegistrationResult =
   | {
@@ -34,22 +37,18 @@ export interface WebMcpToolFactoryOptions {
   readonly onToolInvoked?: () => void;
   readonly getState?: () => PrivacyAccountState;
   readonly recordInspection?: ReadToolInspectionRecorder;
+  readonly stagedPlanStore?: StagedPlanStore;
 }
 
 /**
- * The central Phase 3 inventory. Keeping construction here makes the
+ * The central Phase 4 inventory. Keeping construction here makes the
  * registered surface auditable and prevents component-level registrations.
  */
 export function createWebMcpTools(
   options: WebMcpToolFactoryOptions = {},
 ): readonly WebMCP.ModelContextTool[] {
   return [
-    createPrivacySummaryTool(
-      options.onToolInvoked,
-      options.getState,
-      options.recordInspection,
-    ),
-    createDataMapTool(
+    createExplainDataUseTool(
       options.onToolInvoked,
       options.getState,
       options.recordInspection,
@@ -59,10 +58,24 @@ export function createWebMcpTools(
       options.getState,
       options.recordInspection,
     ),
-    createExplainDataUseTool(
+    createDataMapTool(
       options.onToolInvoked,
       options.getState,
       options.recordInspection,
+    ),
+    createPrivacySummaryTool(
+      options.onToolInvoked,
+      options.getState,
+      options.recordInspection,
+    ),
+    createPreviewConsentPlanTool(
+      options.onToolInvoked,
+      options.getState,
+    ),
+    createStageConsentPlanTool(
+      options.onToolInvoked,
+      options.getState,
+      options.stagedPlanStore,
     ),
   ];
 }

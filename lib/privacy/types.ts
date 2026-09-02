@@ -47,6 +47,20 @@ export type ProcessingRequirement = "required" | "optional";
 
 export type ConsentState = "required" | "enabled" | "disabled";
 
+export const CONSENT_TARGET_STATES = ["enabled", "disabled"] as const;
+
+export type ConsentTargetState = (typeof CONSENT_TARGET_STATES)[number];
+
+/**
+ * The only category-level change shape accepted by Phase 4 planning tools.
+ * Required processing remains represented as `ConsentState` on account state;
+ * plans can only request the two controllable target states.
+ */
+export interface ConsentChange {
+  readonly categoryId: DataCategoryId;
+  readonly targetConsentState: ConsentTargetState;
+}
+
 export type DataSource =
   | "user_provided"
   | "service_observed"

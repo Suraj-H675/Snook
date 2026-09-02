@@ -10,6 +10,7 @@ import {
   createUiInspectionStore,
   type UiInspectionStore,
 } from "../lib/state/inspection-store.ts";
+import { createStagedPlanStore, type StagedPlanStore } from "../lib/state/staged-plan-store.ts";
 import {
   createPrivacyStateStore,
   type PrivacyStateStore,
@@ -43,20 +44,24 @@ function createMemoryStorage() {
 function createTestRuntime(): {
   readonly inspectionStore: UiInspectionStore;
   readonly privacyStore: PrivacyStateStore;
+  readonly stagedPlanStore: StagedPlanStore;
   readonly tools: readonly WebMCP.ModelContextTool[];
 } {
   const privacyStore = createPrivacyStateStore({
     storage: createMemoryStorage(),
   });
   const inspectionStore = createUiInspectionStore();
+  const stagedPlanStore = createStagedPlanStore();
 
   return {
     inspectionStore,
     privacyStore,
+    stagedPlanStore,
     tools: createWebMcpTools({
       getState: privacyStore.getState,
       recordInspection: (tool, categoryId) =>
         inspectionStore.recordInspection(tool, categoryId),
+      stagedPlanStore,
     }),
   };
 }
@@ -85,23 +90,29 @@ function assertSuccess<T extends { ok: true; data: unknown }>(
   assert.equal(result.ok, true);
 }
 
-test("Phase 3 inventory contains exactly four read-only tools", () => {
+test("Phase 4 inventory contains exactly six tools with honest side effects", () => {
   const { tools } = createTestRuntime();
   const names = tools.map((tool) => tool.name);
 
   assert.deepEqual(names, [
-    "get_privacy_summary",
-    "get_data_map",
-    "get_consent_state",
     "explain_data_use",
+    "get_consent_state",
+    "get_data_map",
+    "get_privacy_summary",
+    "preview_consent_plan",
+    "stage_consent_plan",
   ]);
   assert.deepEqual(names, WEBMCP_TOOL_NAMES);
-  assert.equal(new Set(names).size, 4);
+  assert.equal(new Set(names).size, 6);
 
-  for (const tool of tools) {
+  for (const tool of tools.slice(0, 5)) {
     assert.deepEqual(tool.annotations, { readOnlyHint: true });
     assert.equal("untrustedContentHint" in (tool.annotations ?? {}), false);
   }
+  assert.deepEqual(
+    tools.find((tool) => tool.name === "stage_consent_plan")?.annotations,
+    { readOnlyHint: false },
+  );
 
   assert.deepEqual(findTool(tools, "get_privacy_summary").inputSchema, {
     type: "object",
@@ -129,6 +140,34 @@ test("Phase 3 inventory contains exactly four read-only tools", () => {
     required: ["categoryId"],
     additionalProperties: false,
   });
+  for (const toolName of ["preview_consent_plan", "stage_consent_plan"]) {
+    assert.deepEqual(findTool(tools, toolName).inputSchema, {
+      type: "object",
+      properties: {
+        changes: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              categoryId: {
+                type: "string",
+                enum: [...DATA_CATEGORY_IDS],
+              },
+              targetConsentState: {
+                type: "string",
+                enum: ["enabled", "disabled"],
+              },
+            },
+            required: ["categoryId", "targetConsentState"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["changes"],
+      additionalProperties: false,
+    });
+  }
 });
 
 test("get_privacy_summary preserves its compatible contract and reads live state", async () => {
@@ -458,6 +497,59 @@ test("all Phase 3 tools remain read-only for account state and persistence", asy
   assert.equal(inspectionStore.getState().sequence, 4);
 });
 
+test("the four understanding tools remain anchored to actual state after staging", async () => {
+  const { privacyStore, stagedPlanStore, tools } = createTestRuntime();
+  const stageResult = await executeTool<{
+    readonly ok: true;
+    readonly data: { readonly after: { readonly privacyScore: number } };
+  }>(findTool(tools, "stage_consent_plan"), {
+    changes: [
+      { categoryId: "location_history", targetConsentState: "disabled" },
+    ],
+  });
+  assertSuccess(stageResult);
+  assert.equal(stageResult.data.after.privacyScore, 66);
+  assert.notEqual(stagedPlanStore.getState().plan, null);
+
+  const summary = await executeTool<PrivacySummaryResult>(
+    findTool(tools, "get_privacy_summary"),
+    {},
+  );
+  const dataMap = await executeTool<GetDataMapResult>(
+    findTool(tools, "get_data_map"),
+    {},
+  );
+  const consent = await executeTool<GetConsentStateResult>(
+    findTool(tools, "get_consent_state"),
+    {},
+  );
+  const explanation = await executeTool<ExplainDataUseResult>(
+    findTool(tools, "explain_data_use"),
+    { categoryId: "location_history" },
+  );
+
+  assertSuccess(summary);
+  assertSuccess(dataMap);
+  assertSuccess(consent);
+  assertSuccess(explanation);
+  assert.equal(summary.data.privacyScore, 54);
+  assert.equal(summary.data.stateVersion, 1);
+  assert.equal(
+    dataMap.data.categories.find((category) => category.id === "location_history")
+      ?.status,
+    "active",
+  );
+  assert.equal(
+    consent.data.categories.find(
+      (category) => category.categoryId === "location_history",
+    )?.consentState,
+    "enabled",
+  );
+  assert.equal(explanation.data.stateVersion, 1);
+  assert.equal(explanation.data.category.consentState, "enabled");
+  assert.equal(privacyStore.getState().stateVersion, 1);
+});
+
 test("central registration registers the inventory once for a model context", async () => {
   const previousDocument = globalThis.document;
   const previousWindow = globalThis.window;
@@ -484,7 +576,7 @@ test("central registration registers the inventory once for a model context", as
     assert.equal(first.status, "registered");
     assert.equal(second.status, "registered");
     assert.deepEqual(registeredTools.map((tool) => tool.name), WEBMCP_TOOL_NAMES);
-    assert.equal(registeredTools.length, 4);
+    assert.equal(registeredTools.length, 6);
   } finally {
     if (previousDocument === undefined) {
       delete (globalThis as { document?: Document }).document;

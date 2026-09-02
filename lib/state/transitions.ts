@@ -1,6 +1,7 @@
 import { PRIVACY_CATALOG } from "../privacy/catalog.ts";
 import { getDataCategory } from "../privacy/queries.ts";
 import type {
+  ConsentChange,
   ConsentState,
   DataCategoryId,
   PrivacyAccountState,
@@ -36,6 +37,21 @@ export interface PrivacyTransitionFailure {
 export type PrivacyTransitionResult =
   | PrivacyTransitionSuccess
   | PrivacyTransitionFailure;
+
+export interface PrivacyBatchTransitionSuccess {
+  readonly ok: true;
+  readonly state: PrivacyAccountState;
+}
+
+export interface PrivacyBatchTransitionFailure {
+  readonly ok: false;
+  readonly state: PrivacyAccountState;
+  readonly error: PrivacyTransitionError;
+}
+
+export type PrivacyBatchTransitionResult =
+  | PrivacyBatchTransitionSuccess
+  | PrivacyBatchTransitionFailure;
 
 function failure(
   state: PrivacyAccountState,
@@ -124,4 +140,38 @@ export function setCategoryConsentState(
     previousState: currentCategoryState.consentState,
     nextState: desiredState,
   };
+}
+
+/**
+ * Apply a previously validated set of category changes to an immutable
+ * working state. Each individual transition reuses the same invariant checks
+ * as the direct human control path; callers decide whether the returned state
+ * should be committed to a real store.
+ */
+export function applyConsentChanges(
+  state: PrivacyAccountState,
+  changes: readonly ConsentChange[],
+  catalog: PrivacyCatalog = PRIVACY_CATALOG,
+): PrivacyBatchTransitionResult {
+  let nextState = state;
+
+  for (const change of changes) {
+    const result = setCategoryConsentState(
+      nextState,
+      change.categoryId,
+      change.targetConsentState,
+      catalog,
+    );
+    if (!result.ok) {
+      return {
+        ok: false,
+        state,
+        error: result.error,
+      };
+    }
+
+    nextState = result.state;
+  }
+
+  return { ok: true, state: nextState };
 }
