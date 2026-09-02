@@ -7,11 +7,13 @@ import { hashConsentPlan } from "../../plans/hash-plan.ts";
 import { evaluateConsentPlan } from "../../plans/create-plan.ts";
 import type { ConsentChange, PrivacyCatalog } from "../../privacy/types.ts";
 import { PRIVACY_CATALOG } from "../../privacy/catalog.ts";
+import { applyConsentChanges } from "../../state/transitions.ts";
+import { createPrivacyReceipt } from "../../receipts/create-receipt.ts";
+import { serializePrivacyReceipt } from "../../receipts/persistence.ts";
 import {
-  getEnabledOptionalProcessing,
-  getThirdPartySharing,
-} from "../../privacy/queries.ts";
-import { calculatePrivacyScore } from "../../privacy/scoring.ts";
+  getPrivacyReceiptStore,
+  type PrivacyReceiptStore,
+} from "../../state/receipt-store.ts";
 import {
   getApprovalStore,
   type ApprovalStore,
@@ -52,7 +54,8 @@ export interface ApplyApprovedConsentPlanData {
   readonly after: ApplyApprovedConsentPlanSnapshot;
   readonly approvalConsumed: true;
   readonly stagedPlanCleared: true;
-  readonly noReceiptGenerated: true;
+  readonly receiptGenerated: true;
+  readonly receiptId: string;
 }
 
 export type ApplyApprovedConsentPlanErrorCode =
@@ -66,7 +69,8 @@ export type ApplyApprovedConsentPlanErrorCode =
   | "INVALID_DATA_CATEGORY"
   | "REQUIRED_PROCESSING_CANNOT_BE_DISABLED"
   | "NO_VALID_CHANGES"
-  | "PLAN_HASH_UNAVAILABLE";
+  | "PLAN_HASH_UNAVAILABLE"
+  | "RECEIPT_UNAVAILABLE";
 
 export type ApplyApprovedConsentPlanResult =
   | ToolSuccessResult<ApplyApprovedConsentPlanData>
@@ -77,8 +81,11 @@ export interface ApplyApprovedConsentPlanToolOptions {
   readonly onApplied?: () => void;
   readonly privacyStateStore?: PrivacyStateStore;
   readonly stagedPlanStore?: StagedPlanStore;
+  readonly receiptStore?: PrivacyReceiptStore;
   readonly approvalStore?: ApprovalStore;
   readonly catalog?: PrivacyCatalog;
+  readonly clock?: () => number;
+  readonly generateReceiptId?: () => string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,22 +205,23 @@ function changesMatch(
   );
 }
 
-function snapshotForState(
-  state: ReturnType<PrivacyStateStore["getState"]>,
-  catalog: PrivacyCatalog,
-): ApplyApprovedConsentPlanSnapshot {
-  return {
-    privacyScore: calculatePrivacyScore(state, catalog),
-    enabledOptionalCount: getEnabledOptionalProcessing(state, catalog).length,
-    thirdPartySharing: [...getThirdPartySharing(state, catalog)],
-  };
-}
-
 function expectedFailure(
   code: ApplyApprovedConsentPlanErrorCode,
   message: string,
 ): ToolFailureResult<ApplyApprovedConsentPlanErrorCode> {
   return createToolFailure(code, message);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function runPostApplyCallbackSafely(callback?: () => void): void {
+  try {
+    callback?.();
+  } catch {
+    // UI/telemetry notification is non-authoritative after the mutation.
+  }
 }
 
 function mapApprovalFailure(
@@ -253,6 +261,7 @@ export function createApplyApprovedConsentPlanTool(
 ): WebMCP.ModelContextTool {
   const stateStore = options.privacyStateStore ?? getPrivacyStateStore();
   const stagedPlanStore = options.stagedPlanStore ?? getStagedPlanStore();
+  const receiptStore = options.receiptStore ?? getPrivacyReceiptStore();
   const approvalStore = options.approvalStore ?? getApprovalStore();
   const catalog = options.catalog ?? PRIVACY_CATALOG;
 
@@ -260,7 +269,7 @@ export function createApplyApprovedConsentPlanTool(
     name: APPLY_APPROVED_CONSENT_PLAN_TOOL_NAME,
     title: "Apply approved consent plan",
     description:
-      "Apply the CURRENT staged privacy plan only after explicit human website approval of that exact plan. Provide planId, revision, planHash, and baseStateVersion exactly as returned by stage_consent_plan. The website verifies an internal short-lived approval grant bound to all four fields; this tool cannot create approval. If authorization and safety checks succeed, this consequential tool mutates actual account privacy state atomically, consumes the approval, and clears the staged plan. It does not generate a receipt.",
+      "Apply the CURRENT staged privacy plan only after explicit human website approval of that exact plan. Provide planId, revision, planHash, and baseStateVersion exactly as returned by stage_consent_plan. The website verifies an internal short-lived approval grant bound to all four fields; this tool cannot create approval. If authorization and safety checks succeed, this consequential tool mutates actual account privacy state atomically, consumes the approval, creates a completed privacy receipt, and clears the staged plan.",
     inputSchema: APPLY_APPROVED_CONSENT_PLAN_INPUT_SCHEMA,
     annotations: {
       readOnlyHint: false,
@@ -363,9 +372,68 @@ export function createApplyApprovedConsentPlanTool(
         return mapApprovalFailure(validity.status);
       }
 
-      // Everything above is async/pure validation. Claiming the approval and
-      // writing the already-validated deterministic transition happen without
-      // yielding, so a second near-simultaneous call cannot claim the grant.
+      // Prepare and validate the complete receipt before claiming approval.
+      // This work is not published or persisted; it ensures receipt creation
+      // cannot become a new failure point after the irreversible mutation.
+      let preparedReceipt: ReturnType<typeof createPrivacyReceipt>;
+      let preparedSuccessData: ApplyApprovedConsentPlanData;
+      try {
+        const projected = applyConsentChanges(
+          actualState,
+          plan.changes,
+          catalog,
+        );
+        if (!projected.ok) {
+          return createToolFailure(
+            projected.error.code === "REQUIRED_PROCESSING_CANNOT_BE_DISABLED"
+              ? projected.error.code
+              : projected.error.code === "INVALID_DATA_CATEGORY"
+                ? projected.error.code
+                : projected.error.code === "NO_OP"
+                  ? "NO_VALID_CHANGES"
+                  : "INVALID_PLAN_INPUT",
+            projected.error.message,
+          );
+        }
+
+        preparedReceipt = createPrivacyReceipt(
+          actualState,
+          projected.state,
+          plan,
+          {
+            catalog,
+            clock: options.clock,
+            generateReceiptId: options.generateReceiptId,
+          },
+        );
+        // Validate JSON serialization before the mutation. The actual store
+        // will serialize again when it records the post-commit artifact.
+        serializePrivacyReceipt(preparedReceipt);
+        preparedSuccessData = {
+          appliedPlanId: plan.planId,
+          appliedRevision: plan.revision,
+          appliedPlanHash: plan.planHash,
+          previousStateVersion: actualState.stateVersion,
+          stateVersion: projected.state.stateVersion,
+          appliedChanges: plan.changes.map((change) => ({ ...change })),
+          before: preparedReceipt.before,
+          after: preparedReceipt.after,
+          approvalConsumed: true,
+          stagedPlanCleared: true,
+          receiptGenerated: true,
+          receiptId: preparedReceipt.receiptId,
+        };
+      } catch (error) {
+        return expectedFailure(
+          "RECEIPT_UNAVAILABLE",
+          `The completed privacy receipt could not be prepared, so no account changes were made. ${errorMessage(error)}`,
+        );
+      }
+
+      // Everything above is async validation or synchronous precomputation.
+      // Claiming the approval and writing the already-validated deterministic
+      // transition happen without yielding, so a second near-simultaneous call
+      // cannot claim the grant.
       const claim = approvalStore.claim(binding);
       if (!claim.ok) {
         return mapApprovalFailure(claim.status);
@@ -389,26 +457,25 @@ export function createApplyApprovedConsentPlanTool(
         );
       }
 
-      stagedPlanStore.discard();
-      options.onInvoked?.();
-      options.onApplied?.();
+      // The state store has synchronously committed and persisted the actual
+      // transition. From here onward, receipt and UI work is best effort and
+      // cannot change the successful apply result.
+      try {
+        receiptStore.set(preparedReceipt);
+      } catch {
+        // Receipt preparation was already validated before mutation. This
+        // catch protects the irreversible apply from an unexpected store bug.
+      }
+      try {
+        stagedPlanStore.discard();
+      } catch {
+        // The built-in store clears before notifying; cleanup cannot undo the
+        // committed mutation or turn it into an apply failure.
+      }
+      runPostApplyCallbackSafely(options.onInvoked);
+      runPostApplyCallbackSafely(options.onApplied);
 
-      return {
-        ok: true,
-        data: {
-          appliedPlanId: plan.planId,
-          appliedRevision: plan.revision,
-          appliedPlanHash: plan.planHash,
-          previousStateVersion: actualState.stateVersion,
-          stateVersion: applied.state.stateVersion,
-          appliedChanges: plan.changes.map((change) => ({ ...change })),
-          before: snapshotForState(actualState, catalog),
-          after: snapshotForState(applied.state, catalog),
-          approvalConsumed: true,
-          stagedPlanCleared: true,
-          noReceiptGenerated: true,
-        },
-      };
+      return { ok: true, data: preparedSuccessData };
     },
   };
 }

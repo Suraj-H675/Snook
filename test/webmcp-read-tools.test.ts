@@ -90,13 +90,14 @@ function assertSuccess<T extends { ok: true; data: unknown }>(
   assert.equal(result.ok, true);
 }
 
-test("Phase 5 inventory contains exactly seven tools with honest side effects", () => {
+test("Phase 6 inventory contains exactly eight tools with honest side effects", () => {
   const { tools } = createTestRuntime();
   const names = tools.map((tool) => tool.name);
 
   assert.deepEqual(names, [
     "apply_approved_consent_plan",
     "explain_data_use",
+    "export_privacy_receipt",
     "get_consent_state",
     "get_data_map",
     "get_privacy_summary",
@@ -104,7 +105,7 @@ test("Phase 5 inventory contains exactly seven tools with honest side effects", 
     "stage_consent_plan",
   ]);
   assert.deepEqual(names, WEBMCP_TOOL_NAMES);
-  assert.equal(new Set(names).size, 7);
+  assert.equal(new Set(names).size, 8);
 
   for (const tool of tools.filter(
     (candidate) => candidate.name !== "stage_consent_plan" &&
@@ -598,7 +599,7 @@ test("central registration registers the inventory once for a model context", as
     assert.equal(first.status, "registered");
     assert.equal(second.status, "registered");
     assert.deepEqual(registeredTools.map((tool) => tool.name), WEBMCP_TOOL_NAMES);
-    assert.equal(registeredTools.length, 7);
+    assert.equal(registeredTools.length, 8);
   } finally {
     if (previousDocument === undefined) {
       delete (globalThis as { document?: Document }).document;

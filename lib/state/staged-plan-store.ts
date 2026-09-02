@@ -72,6 +72,17 @@ export function createStagedPlanStore(
     }
   }
 
+  function notifyAfterDiscard(): void {
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // Discard is post-commit cleanup; an observer cannot make the apply
+        // appear to fail after the actual state transition has succeeded.
+      }
+    }
+  }
+
   function getState(): StagedPlanState {
     return state;
   }
@@ -159,7 +170,7 @@ export function createStagedPlanStore(
   function discard(): StagedPlanState {
     if (state.plan !== null) {
       state = INITIAL_STAGED_PLAN_STATE;
-      notify();
+      notifyAfterDiscard();
     }
     return state;
   }

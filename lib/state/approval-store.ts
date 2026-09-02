@@ -74,7 +74,12 @@ export function createApprovalStore(
 
   function notify(): void {
     for (const listener of listeners) {
-      listener();
+      try {
+        listener();
+      } catch {
+        // Approval observers are non-authoritative and cannot change the
+        // single-use authorization state or interrupt the apply boundary.
+      }
     }
   }
 

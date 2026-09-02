@@ -19,6 +19,10 @@ import {
   type PrivacyStateStore,
 } from "../lib/state/store.ts";
 import {
+  createPrivacyReceiptStore,
+  type PrivacyReceiptStore,
+} from "../lib/state/receipt-store.ts";
+import {
   applyConsentChanges,
 } from "../lib/state/transitions.ts";
 import {
@@ -36,7 +40,12 @@ function createMemoryStorage() {
       return value;
     },
     setItem(_key: string, nextValue: string): void {
+      void _key;
       value = nextValue;
+    },
+    removeItem(key: string): void {
+      void key;
+      value = null;
     },
     get value(): string | null {
       return value;
@@ -52,6 +61,7 @@ interface ApprovalTestRuntime {
   readonly clock: TestClock;
   readonly storage: ReturnType<typeof createMemoryStorage>;
   readonly privacyStore: PrivacyStateStore;
+  readonly receiptStore: PrivacyReceiptStore;
   readonly stagedPlanStore: StagedPlanStore;
   readonly approvalStore: ApprovalStore;
   readonly tools: readonly WebMCP.ModelContextTool[];
@@ -60,9 +70,13 @@ interface ApprovalTestRuntime {
 function createTestRuntime(startTime = 1_000): ApprovalTestRuntime {
   const clock = { value: startTime };
   const storage = createMemoryStorage();
+  const receiptStore = createPrivacyReceiptStore({
+    storage: createMemoryStorage(),
+  });
   const privacyStore = createPrivacyStateStore({ storage });
   const stagedPlanStore = createStagedPlanStore();
   let approvalSequence = 0;
+  let receiptSequence = 0;
   const approvalStore = createApprovalStore({
     clock: () => clock.value,
     generateApprovalId: () => {
@@ -75,13 +89,20 @@ function createTestRuntime(startTime = 1_000): ApprovalTestRuntime {
     clock,
     storage,
     privacyStore,
+    receiptStore,
     stagedPlanStore,
     approvalStore,
     tools: createWebMcpTools({
       getState: privacyStore.getState,
       privacyStateStore: privacyStore,
+      receiptStore,
       stagedPlanStore,
       approvalStore,
+      clock: () => clock.value,
+      generateReceiptId: () => {
+        receiptSequence += 1;
+        return `receipt_test_${receiptSequence}`;
+      },
     }),
   };
 }
@@ -427,7 +448,7 @@ test("apply accepts only the strict exact-plan binding shape at runtime", async 
   assert.equal(runtime.storage.value, null);
 });
 
-test("an exact approved location plan applies once, clears staging, persists actual state, and reports no receipt", async () => {
+test("an exact approved location plan applies once, clears staging, persists actual state, and reports its receipt", async () => {
   const runtime = createTestRuntime();
   const plan = await stageLocationPlan(runtime);
   const binding = bindingFor(plan);
@@ -462,7 +483,8 @@ test("an exact approved location plan applies once, clears staging, persists act
     },
     approvalConsumed: true,
     stagedPlanCleared: true,
-    noReceiptGenerated: true,
+    receiptGenerated: true,
+    receiptId: "receipt_test_1",
   });
   assert.equal(runtime.privacyStore.getState().categories.location_history.consentState, "disabled");
   assert.equal(getPrivacySummary(runtime.privacyStore.getState()).data.privacyScore, 66);
@@ -862,13 +884,14 @@ test("reload lifecycle persists actual account state but starts with empty stage
   assert.deepEqual(secondApprovalStore.getState(), getInitialApprovalState());
 });
 
-test("all seven tools have the final Phase 5 inventory and honest annotations", () => {
+test("all eight tools have the final Phase 6 inventory and honest annotations", () => {
   const runtime = createTestRuntime();
   const names = runtime.tools.map((tool) => tool.name);
 
   assert.deepEqual(names, [
     "apply_approved_consent_plan",
     "explain_data_use",
+    "export_privacy_receipt",
     "get_consent_state",
     "get_data_map",
     "get_privacy_summary",
@@ -876,11 +899,12 @@ test("all seven tools have the final Phase 5 inventory and honest annotations", 
     "stage_consent_plan",
   ]);
   assert.deepEqual(names, WEBMCP_TOOL_NAMES);
-  assert.equal(new Set(names).size, 7);
+  assert.equal(new Set(names).size, 8);
   assert.deepEqual(
     runtime.tools.filter((tool) => tool.annotations?.readOnlyHint === true).map((tool) => tool.name),
     [
       "explain_data_use",
+      "export_privacy_receipt",
       "get_consent_state",
       "get_data_map",
       "get_privacy_summary",

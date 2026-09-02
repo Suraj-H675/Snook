@@ -22,6 +22,11 @@ import {
   privacyStateStore,
 } from "@/lib/state/store";
 import {
+  getInitialPrivacyReceiptState,
+  getPrivacyReceiptStore,
+  privacyReceiptStore,
+} from "@/lib/state/receipt-store";
+import {
   getInitialStagedPlanState,
   stagedPlanStore,
 } from "@/lib/state/staged-plan-store";
@@ -35,13 +40,14 @@ import CategoryDetailPanel from "./CategoryDetailPanel";
 import PrivacyCategoryCard from "./PrivacyCategoryCard";
 import PrivacyOverview from "./PrivacyOverview";
 import StagedPlanPanel from "@/components/plan/StagedPlanPanel";
+import PrivacyReceipt from "@/components/receipt/PrivacyReceipt";
 
 type PageStatus = "checking" | WebMcpRegistrationResult["status"];
 
 function statusLabel(status: PageStatus): string {
   switch (status) {
     case "registered":
-      return "Browser agent connected · seven tools ready";
+      return "Browser agent connected · eight tools ready";
     case "unavailable":
       return "WebMCP unavailable in this browser";
     case "error":
@@ -85,6 +91,11 @@ export default function PrivacyControlCenter() {
     approvalStore.getState,
     getInitialApprovalState,
   );
+  const receiptState = useSyncExternalStore(
+    privacyReceiptStore.subscribe,
+    privacyReceiptStore.getSnapshot,
+    getInitialPrivacyReceiptState,
+  );
   const [status, setStatus] = useState<PageStatus>("checking");
   const [statusReason, setStatusReason] = useState(
     "The page checks for WebMCP after the human interface is ready.",
@@ -119,6 +130,7 @@ export default function PrivacyControlCenter() {
     // Hydrate before registration so the read-only tool and the first human
     // render share the same persisted current state.
     getPrivacyStateStore().hydrate();
+    getPrivacyReceiptStore().hydrate();
 
     void registerWebMcpTools(
       () => {
@@ -129,7 +141,7 @@ export default function PrivacyControlCenter() {
       () => {
         if (isMounted) {
           setFeedback(
-            "Approved plan applied. Actual privacy settings and score are updated. No receipt was generated in this phase.",
+            "Approved plan applied. Actual privacy settings and score are updated, and a completed receipt is ready below.",
           );
         }
       },
@@ -141,7 +153,7 @@ export default function PrivacyControlCenter() {
       setStatus(result.status);
       setStatusReason(
         result.status === "registered"
-          ? "The agent can inspect, preview, stage, and apply only an exact plan approved here."
+          ? "The agent can inspect, preview, stage, apply, and export only through the human-controlled flow."
           : result.reason,
       );
     });
@@ -275,6 +287,7 @@ export default function PrivacyControlCenter() {
     stagedPlanStore.reset();
     approvalStore.reset();
     uiInspectionStore.reset();
+    privacyReceiptStore.reset();
     setApprovalFeedback(null);
     const resetSummary = getPrivacySummary(resetState, PRIVACY_CATALOG).data;
     setFeedback(
@@ -365,10 +378,10 @@ export default function PrivacyControlCenter() {
               Your choices stay in this browser
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Optional settings persist across reloads for this demo. Reset returns everything to the known starting point.
+              Optional settings and the latest completed receipt persist across reloads for this demo. Reset returns everything to the known starting point.
             </p>
             <p className="mt-4 border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500">
-              The browser agent can inspect, preview, and stage proposals. Consequential changes require your explicit approval here before agent application.
+              The browser agent can inspect, preview, stage, apply an approved plan, and export its completed receipt. Consequential changes require your explicit approval here before agent application.
             </p>
           </div>
         </section>
@@ -387,6 +400,16 @@ export default function PrivacyControlCenter() {
           optionalCategoryCount={optionalCategoryCount}
           summary={summary}
         />
+
+        {receiptState.receipt ? (
+          <div className="mt-8">
+            <PrivacyReceipt
+              catalog={PRIVACY_CATALOG}
+              currentStateVersion={currentState.stateVersion}
+              receipt={receiptState.receipt}
+            />
+          </div>
+        ) : null}
 
         {stagedPlanState.plan ? (
           <div className="mt-8">

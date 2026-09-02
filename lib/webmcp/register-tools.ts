@@ -9,6 +9,10 @@ import {
 } from "../state/approval-store.ts";
 import { getPrivacyStateStore } from "../state/store.ts";
 import type { PrivacyStateStore } from "../state/store.ts";
+import {
+  getPrivacyReceiptStore,
+  type PrivacyReceiptStore,
+} from "../state/receipt-store.ts";
 import type { ReadToolInspectionRecorder } from "./tool-context.ts";
 import {
   EXPLAIN_DATA_USE_TOOL_NAME,
@@ -20,6 +24,7 @@ import { createConsentStateTool } from "./tools/get-consent-state.ts";
 import { createDataMapTool } from "./tools/get-data-map.ts";
 import { createPrivacySummaryTool } from "./tools/get-privacy-summary.ts";
 import { createExplainDataUseTool } from "./tools/explain-data-use.ts";
+import { createExportPrivacyReceiptTool } from "./tools/export-privacy-receipt.ts";
 import { createPreviewConsentPlanTool } from "./tools/preview-consent-plan.ts";
 import { createStageConsentPlanTool } from "./tools/stage-consent-plan.ts";
 import {
@@ -48,11 +53,14 @@ export interface WebMcpToolFactoryOptions {
   readonly recordInspection?: ReadToolInspectionRecorder;
   readonly stagedPlanStore?: StagedPlanStore;
   readonly privacyStateStore?: PrivacyStateStore;
+  readonly receiptStore?: PrivacyReceiptStore;
   readonly approvalStore?: ApprovalStore;
+  readonly clock?: () => number;
+  readonly generateReceiptId?: () => string;
 }
 
 /**
- * The central Phase 5 inventory. Keeping construction here makes the
+ * The central Phase 6 inventory. Keeping construction here makes the
  * registered surface auditable and prevents component-level registrations.
  */
 export function createWebMcpTools(
@@ -60,6 +68,7 @@ export function createWebMcpTools(
 ): readonly WebMCP.ModelContextTool[] {
   const privacyStateStore = options.privacyStateStore ?? getPrivacyStateStore();
   const stagedPlanStore = options.stagedPlanStore;
+  const receiptStore = options.receiptStore ?? getPrivacyReceiptStore();
   const approvalStore = options.approvalStore ?? getApprovalStore();
 
   return [
@@ -67,14 +76,18 @@ export function createWebMcpTools(
       onInvoked: options.onToolInvoked,
       onApplied: options.onPlanApplied,
       privacyStateStore,
+      receiptStore,
       stagedPlanStore,
       approvalStore,
+      clock: options.clock,
+      generateReceiptId: options.generateReceiptId,
     }),
     createExplainDataUseTool(
       options.onToolInvoked,
       options.getState,
       options.recordInspection,
     ),
+    createExportPrivacyReceiptTool(options.onToolInvoked, receiptStore),
     createConsentStateTool(
       options.onToolInvoked,
       options.getState,

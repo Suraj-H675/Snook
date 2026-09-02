@@ -79,7 +79,12 @@ export function createPrivacyStateStore(
 
   function notify(): void {
     for (const listener of listeners) {
-      listener();
+      try {
+        listener();
+      } catch {
+        // Observers are non-authoritative; they cannot turn a persisted
+        // privacy transition into a failed human or agent mutation.
+      }
     }
   }
 
